@@ -1,0 +1,348 @@
+---
+title: "Early C2C12 Growth"
+author: "Dr. Sara J. Smith"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  pdf_document:
+    toc: yes
+    latex_engine: xelatex
+  html_document:
+    df_print: kable
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts = list(width.cutoff = 80))
+```
+
+## **Load Libraries & Data**
+
+Load necessary libraries and data, clean and refactor data.
+
+```{r, message = F, warning = F}
+library(readxl)
+library(lmerTest)
+library(DHARMa)
+library(emmeans)
+library(fitdistrplus)
+library(PNWColors)
+library(tidyverse)
+```
+
+```{r, echo = F, message = F, warning = F}
+myo <- read_excel("serum.xlsx", sheet = 1) %>% 
+  mutate(condition = fct_relevel(as.factor(condition), "10FBS"),
+         trial = as.factor(trial), 
+         day = fct_relevel(as.factor(day), "MB"))
+
+p21 <- read_excel("serum.xlsx", sheet = 2) %>% 
+  mutate(condition = fct_relevel(as.factor(condition), "10FBS"),
+         trial = as.factor(trial), 
+         day = fct_relevel(as.factor(day), "MB"))
+
+cfi <- read_excel("serum.xlsx", sheet = 3) %>% 
+  mutate(condition = fct_relevel(as.factor(condition), "10FBS"),
+         trial = as.factor(trial)) %>%
+  select(-c(day))
+
+diam <- read_excel("serum.xlsx", sheet = 4) %>% 
+  mutate(condition = fct_relevel(as.factor(condition), "10FBS"),
+         trial = as.factor(trial), 
+         day = fct_relevel(as.factor(day), "7"))
+
+diam.clean <- diam %>%
+  group_by(condition, day, trial) %>%
+  summarize(avg.diam = mean(diameter))
+```
+
+## **Myogenin Expression**
+
+### *Modelling*
+```{r}
+myo.mod <- lmer(deltacq ~ condition*day + (1|trial), data = myo)
+myo.res <- simulateResiduals(myo.mod)
+plot(myo.res)
+```
+
+```{r}
+summary(myo.mod)
+```
+
+- Intercept: Represents the predicted deltacq value for the 10FBS
+  condition at Day MB
+
+- Condition effects (at Day MB): Compared to 10FBS at the MB time point,
+  `deltacq` is significantly higher across all other media
+
+- Day effects (in 10FBS): Relative to Day MB, `deltacq` significantly
+  decreases over time within the baseline 10FBS condition
+
+- Condition \* Day interactions: None of the `condition:day1`
+  interaction terms are strong. This indicates that the change in
+  `deltacq` from Day MB to Day 1 in 10HS, 2FBS, and 2HS is not
+  meaningfully different from the drop observed in 10FBS.
+
+- All condition:day2 terms were automatically dropped because of the
+  model matrix rank deficiency. Model is built in order of Intercept,
+  Main Effects, then Interactions, which "uses up" all available degrees
+  of freedom before getting to day 2 in interaction terms
+
+Let's try a model without MB to capture a full factorial design:
+
+```{r}
+myo.diff <- myo %>%
+  filter(day == "1" | day == "2")
+  
+myo.diff.mod <- lmer(deltacq ~ condition * day + (1 | trial), data = myo.diff)
+myo.diff.res <- simulateResiduals(myo.diff.mod)
+plot(myo.diff.res)
+```
+
+```{r}
+summary(myo.diff.mod)
+```
+
+- Intercept: Represents the baseline predicted deltacq for 10FBS on Day 1.  
+
+- Day 1 Condition effects: On Day 1, all test conditions show
+  significantly higher `deltacq` values compared to the baseline 10FBS
+
+- Time (day 1 to day 2): In the 10FBS baseline condition, `deltacq`
+  significantly decreases by 2.13 units from Day 1 to Day 2.
+
+- Condition \* Day interactions: None of the interaction terms exhibit
+  differences. This indicates that the rate of change from Day 1 to Day
+  2 in 10HS, 2FBS, and 2HS does not meaningfully differ from 10FBS.
+
+
+#### *New model Sept 14 2026*
+
+The interaction term in the previous model (`myo.diff.mod`) was not significant, and therefore we can drop the interaction term, model just fixed effects and extract estimated marginal means from that model instead. 
+
+```{r}
+myo.diff.mod2 <- lmer(deltacq ~ condition + day + (1 | trial), data = myo.diff)
+myo.diff.res2 <- simulateResiduals(myo.diff.mod2)
+plot(myo.diff.res2)
+```
+
+```{r}
+AIC(myo.diff.mod, myo.diff.mod2) # effectively equal
+summary(myo.diff.mod2)
+```
+
+Extracting estimated marginal means
+```{r}
+myo.cond.emmeans <- emmeans(myo.diff.mod2, pairwise ~ condition | day)
+myo.cond.emmeans
+```
+
+```{r}
+myo.day.emmeans <- emmeans(myo.diff.mod2, pairwise ~ day | condition)
+myo.day.emmeans
+```
+
+
+### *Visualization*
+
+Colour palette for MB, Day 1, Day 2
+NB: can convert all colour palettes to a colourblind or grey scale friendly palette
+```{r}
+day.cols <- pnw_palette(name = "Starfish", n = 3, type = "discrete")
+```
+  
+Myogenin expression
+```{r}
+ggplot(myo, aes(x = day, y = deltacq, fill = day, colour = day)) +
+  geom_jitter() + 
+  geom_violin(alpha = 0.5) + 
+  scale_color_manual(values = day.cols) + 
+  scale_fill_manual(values = day.cols) + 
+  theme_classic() + 
+  labs(x = "Day", y = "Myogenin ΔCq") + 
+  theme(legend.position = "none") + 
+  coord_cartesian(ylim = c(0, 13))
+```
+
+
+
+## **p21 Expression**
+
+### *Modelling*
+```{r}
+p21.mod <- lmer(deltacq ~ condition*day + (1|trial), data = p21)
+p21.res <- simulateResiduals(p21.mod)
+plot(p21.res)
+```
+
+```{r}
+summary(p21.mod)
+```
+
+Rank deficient again, so dropping day MB
+
+```{r}
+p21.diff <- p21 %>%
+  filter(day == "1" | day == "2")
+  
+p21.diff.mod <- lmer(deltacq ~ condition * day + (1 | trial), data = p21.diff)
+p21.diff.res <- simulateResiduals(p21.diff.mod)
+plot(p21.diff.res) # sig issues with quantile test
+```
+
+```{r}
+summary(p21.diff.mod)
+```
+
+- Intercept: Represents the baseline predicted `deltacq` for 10FBS at
+  Day 1.
+
+- Condition main effects (day 1): None of the media conditions differ
+  significantly from the 10FBS baseline on Day 1.
+
+- Time main effect (day2): `deltacq` does not change significantly
+  between Day 1 and Day 2 within 10FBS.
+
+- Condition \* Day interactions: None of the interaction terms are
+  significant.
+
+```{r}
+p21.noint.mod <- lmer(deltacq ~ condition + day + (1 | trial), data = p21.diff)
+noint.res <- simulateResiduals(p21.noint.mod)
+plot(noint.res) # no issues 
+```
+
+```{r}
+summary(p21.noint.mod)
+```
+
+- Intercept: Represents the baseline predicted `deltacq` for 10FBS at
+  Day 1.
+  
+  * Condition effects (averaged across days): No significant differences exist between conditions
+  
+  * Time Effect (averaged across conditions): decrease in `deltacq` on day 2 relative to day 1, but not significant (p = 0.0526) 
+
+
+Extracting estimated marginal means: 
+```{r}
+p21.cond.emmeans <- emmeans(p21.noint.mod, pairwise ~ condition | day)
+p21.cond.emmeans
+```
+
+```{r}
+p21.day.emmeans <- emmeans(p21.noint.mod, pairwise ~ day | condition)
+p21.day.emmeans
+```
+
+
+### *Visualization*
+```{r}
+ggplot(p21, aes(x = day, y = deltacq, fill = day, colour = day)) +
+  geom_jitter() + 
+  geom_violin(alpha = 0.5) + 
+  scale_color_manual(values = day.cols) + 
+  scale_fill_manual(values = day.cols) + 
+  theme_classic() + 
+  labs(x = "Day", y = "p21 ΔCq") + 
+  theme(legend.position = "none") + 
+  coord_cartesian(ylim = c(0, 8))
+```
+
+
+## **Cell Fusion Index**
+
+### *Modelling*
+```{r}
+cfi.mod <- lmer(cfi ~ condition + (1|trial), data = cfi)
+cfi.res <- simulateResiduals(cfi.mod)
+plot(cfi.res)
+```
+
+```{r}
+summary(cfi.mod)
+cfi.emm <- emmeans(cfi.mod, pairwise ~ condition)
+summary(cfi.emm)
+```
+
+Significant comparisons: 
+
+ * 10FBS - 2FBS (0.001)
+ * 10FBS - 2HS (<0.001)
+ * 10HS - 2FBS (<0.001)
+ * 10HS - 2 HS (<0.001)
+ 
+### *Visualization*
+
+Colour palette for conditions (10FBS, 10HS, 2FBS, 2HS)
+```{r}
+cond.cols <- pnw_palette(name = "Sunset", n = 4, type = "discrete")
+```
+
+```{r}
+ggplot(cfi, aes(x = condition, y = cfi, fill = condition, colour = condition)) +
+  geom_jitter() + 
+  geom_violin(alpha = 0.5) + 
+  scale_color_manual(values = cond.cols) + 
+  scale_fill_manual(values = cond.cols) + 
+  theme_classic() + 
+  labs(x = "Condition", y = "Cell Fusion Index (CFI)") + 
+  theme(legend.position = "none") + 
+  coord_cartesian(ylim = c(0, 110))
+```
+
+Note: this x-axis can be rearranged depending on what order you want the conditions to be presented in
+
+
+## **Myotube Diameter**
+
+### *Modelling*
+```{r}
+diam.lmod <- lmer(avg.diam ~ condition*day + (1|trial), data = diam.clean)
+diam.lres <- simulateResiduals(diam.lmod)
+plot(diam.lres) # singular and quantile 
+```
+
+```{r}
+diam.mod <- lmer(avg.diam ~ condition * day + (1|trial), data = diam.clean)
+diam.res <- simulateResiduals(diam.mod)
+plot(diam.res) # singular and quantile, with or without interaction
+```
+
+```{r}
+diam.noRE <- lm(avg.diam ~ condition * day + trial, data = diam.clean)
+diam.noRE.res <- simulateResiduals(diam.noRE)
+plot(diam.noRE.res) # looks good 
+```
+
+```{r}
+summary(diam.noRE)
+```
+
+```{r}
+diam.condDay <- emmeans(diam.noRE, pairwise ~ condition | day) 
+diam.condDay
+
+diam.dayCond <- emmeans(diam.noRE, pairwise ~ day | condition)
+diam.dayCond
+```
+
+
+### *Visualization*
+
+```{r}
+ggplot(diam, aes(x = day, y = diameter, colour = condition, fill = condition)) + 
+  stat_summary(fun = mean, geom = "point", alpha = 0.8) + 
+  stat_summary(fun = mean, geom = "line", aes(group = condition), linewidth = 1, lty = 2) + 
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1, alpha = 0.8) + 
+  scale_colour_manual(values = cond.cols) +
+  scale_fill_manual(values = cond.cols) +
+  theme_classic() + 
+  labs(x = "Day", y = "Myotube Diameter (μm)", colour = "Condition", fill = "Condition") + 
+  coord_cartesian(ylim = c(0, 100))
+```
+
